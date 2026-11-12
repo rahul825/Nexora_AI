@@ -1,70 +1,98 @@
-# Getting Started with Create React App
+# Naroxa AI
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Naroxa AI is a RAG-based AI assistant. It has a FastAPI + LangGraph backend, Google Gemini models, a Qdrant vector database and a React chat UI.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- **Document Q&A (RAG):** answers questions from a PDF. The PDF is split into chunks, embedded locally with FastEmbed and stored in Qdrant.
+- **Database Q&A:** an agent answers questions about a MySQL database. It writes read-only SQL and can also run vector search over the rows.
+- **Multi-agent assistant:** a router agent sends each request to one of two agents:
+  - **Text agent:** answers questions and writes text.
+  - **Image agent:** generates images with a Gemini image model.
+- **Chat sessions:** chat history is stored in SQLite, so it is still there after a restart.
 
-### `npm start`
+```
+START -> router --(text)--> text_agent  --> END
+                +-(image)-> image_agent --> END
+```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Project structure
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```
+.
+├── venv/                  # backend source (FastAPI app)
+│   ├── main.py            # app entry point, CORS, routers, /images static files
+│   ├── agent.py           # multi-agent: router -> text / image agent
+│   ├── rag_agent.py       # PDF RAG agent
+│   ├── db_qa_agent.py     # MySQL Q&A agent (SQL + vector search tools)
+│   ├── vector_db.py       # shared Qdrant client
+│   ├── database.py        # MySQL connection (SQLAlchemy)
+│   ├── chat_store.py      # chat history (SQLite)
+│   ├── routes/            # API routes
+│   └── .env.example
+├── frontend/              # React + Vite chat UI
+├── docker-compose.yml     # Qdrant server
+└── requirements.txt
+```
 
-### `npm test`
+## Setup
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### 1. Backend
 
-### `npm run build`
+```bash
+python -m venv venv
+# Windows: venv\Scripts\activate    macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+cp venv/.env.example venv/.env   # then fill in GOOGLE_API_KEY, DB_* etc.
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+Put the document for the RAG agent at `venv/data/RagDocument.pdf`.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Optional: start a Qdrant server with Docker and set `QDRANT_URL=http://localhost:6333`. If `QDRANT_URL` is empty, Qdrant runs locally on disk instead.
 
-### `npm run eject`
+```bash
+docker compose up -d
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+Run the API:
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+cd venv
+uvicorn main:app --reload
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+The API docs are at http://localhost:8000/docs.
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### 2. Frontend
 
-## Learn More
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Open http://localhost:5180.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+## Main API endpoints (prefix `/api/v1`)
 
-### Code Splitting
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/ask` | Multi-agent: returns a text answer, or an image (`image_url`) |
+| POST | `/rag/ask` | Ask the PDF document |
+| POST | `/db/ask` | Ask the MySQL database |
+| POST | `/db/reindex` | Rebuild the vector index of the database |
+| GET/POST/PATCH/DELETE | `/chat/sessions...` | Chat sessions used by the UI |
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+Example:
 
-### Analyzing the Bundle Size
+```bash
+curl -X POST http://localhost:8000/api/v1/ask -H "Content-Type: application/json" \
+     -d '{"question": "Generate an image of a sunset over mountains"}'
+# {"agent": "image", "answer": "...", "image_url": "/images/<id>.png", ...}
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Images are served at `http://localhost:8000/images/<id>.png`.
 
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+> **Note:** Gemini image models have no free-tier quota. Image generation needs an API key with billing enabled. Set `GEMINI_IMAGE_MODEL` to change the model.
